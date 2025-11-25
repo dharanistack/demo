@@ -1,0 +1,14 @@
+{
+  "output": {
+    "arn": {
+      "description": "The value of the arn output",
+      "sensitive": false,
+      "value": "${aws_db_subnet_group.this.arn}"
+    },
+    "name": {
+      "description": "The name of the db subnet group",
+      "sensitive": false,
+      "value": "${aws_db_subnet_group.this.name}"
+    }
+  }
+}
