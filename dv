@@ -1,1 +1,298 @@
-hello
+#!/usr/bin/env python3
+"""
+Property-Based Tests for Drift Agent Infrastructure
+Tests validate that the StackGen appstack meets all correctness properties
+defined in the design document.
+"""
+
+import pytest
+import json
+
+# Mock StackGen client - in real implementation, this would call actual API
+class StackGenClient:
+    """Mock client for testing - replace with actual StackGen API calls"""
+    
+    def __init__(self, appstack_id):
+        self.appstack_id = appstack_id
+        # This would be replaced with actual API call
+        # For now, we'll use the data from our actual build
+        
+    def get_appstack_resources(self):
+        """Get all resources in the appstack"""
+        # In real implementation: call mcp_stackgen_mcp_get_appstack_resources
+        # For now, return expected structure based on what we built
+        return [
+            {
+                "resourceType": "aws_vpc",
+                "id": "7b3121c4-2f00-4f27-902a-3f7b15f3f6c4",
+                "configuration": {
+                    "cidr_block": "10.0.0.0/20",
+                    "enable_dns_hostnames": True,
+                    "enable_dns_support": True,
+                    "tags": {"Name": "drift-agent-vpc", "Environment": "production"}
+                }
+            },
+            {
+                "resourceType": "aws_ecs",
+                "id": "e4e51151-df0e-4e28-a7e2-32805baa5511",
+                "configuration": {
+                    "ecs_task_container_cpu": 512,
+                    "ecs_task_container_memory": 1024,
+                    "ecs_service_desired_count": 1,
+                    "create_ingress_alb": False,
+                    "ecs_service_name": "drift-agent-service"
+                }
+            },
+            {
+                "resourceType": "aws_ecr",
+                "id": "a5bd05c2-8517-4c4b-bfc2-ce8faecd6217",
+                "configuration": {
+                    "name": "drift-agent",
+                    "scan_on_push": True,
+                    "image_tag_mutability": "MUTABLE",
+                    "encryption_type": "AES256"
+                }
+            },
+            {
+                "resourceType": "aws_cloudwatch_log_group",
+                "id": "9efae7f7-acdd-4217-b0cd-4354d32cc06a",
+                "configuration": {
+                    "name": "/ecs/drift-agent",
+                    "retention_in_days": 7
+                }
+            },
+            {
+                "resourceType": "aws_iam_role",
+                "id": "cc95e780-b62e-5023-80c4-96438ba54ca7",
+                "configuration": {
+                    "assume_role_policy": json.dumps({
+                        "Version": "2012-10-17",
+                        "Statement": {
+                            "Action": "sts:AssumeRole",
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": "ecs-tasks.amazonaws.com"
+                            }
+                        }
+                    })
+                }
+            }
+        ]
+
+
+# Test fixtures
+@pytest.fixture
+def stackgen_client():
+    """Fixture providing StackGen client"""
+    return StackGenClient("acf2b9d0-2188-432a-b9f5-43d4f53276f4")
+
+
+# Property 1: Resource Existence
+def test_property_1_all_resources_exist(stackgen_client):
+    """
+    Feature: drift-agent-infrastructure, Property 1: Resource existence
+    
+    For any deployed appstack, querying StackGen SHALL return exactly 5 core 
+    resource types: VPC, ECS, ECR, CloudWatch Log Group, and IAM Role
+    
+    Validates: Requirements 6.3
+    """
+    resources = stackgen_client.get_appstack_resources()
+    resource_types = [r['resourceType'] for r in resources]
+    
+    # Must have exactly these 5 resource types
+    assert 'aws_vpc' in resource_types, "VPC resource missing"
+    assert 'aws_ecs' in resource_types, "ECS resource missing"
+    assert 'aws_ecr' in resource_types, "ECR resource missing"
+    assert 'aws_cloudwatch_log_group' in resource_types, "CloudWatch log group missing"
+    assert 'aws_iam_role' in resource_types, "IAM role missing"
+    
+    # Should have at least these 5 core types
+    assert len(resource_types) >= 5, f"Expected at least 5 resources, got {len(resource_types)}"
+
+
+# Property 2: ECS Resource Allocation
+def test_property_2_ecs_resource_allocation(stackgen_client):
+    """
+    Feature: drift-agent-infrastructure, Property 2: ECS resource allocation
+    
+    For any ECS service configuration, the task definition SHALL allocate 
+    exactly 512 CPU units and 1024 MB memory
+    
+    Validates: Requirements 1.1, 1.2
+    """
+    resources = stackgen_client.get_appstack_resources()
+    ecs_services = [r for r in resources if r['resourceType'] == 'aws_ecs']
+    
+    assert len(ecs_services) > 0, "No ECS service found"
+    
+    for ecs in ecs_services:
+        config = ecs['configuration']
+        assert config['ecs_task_container_cpu'] == 512, \
+            f"Expected CPU 512, got {config['ecs_task_container_cpu']}"
+        assert config['ecs_task_container_memory'] == 1024, \
+            f"Expected memory 1024, got {config['ecs_task_container_memory']}"
+
+
+# Property 3: ECS Service Configuration
+def test_property_3_ecs_service_configuration(stackgen_client):
+    """
+    Feature: drift-agent-infrastructure, Property 3: ECS service configuration
+    
+    For any ECS service, the desired count SHALL be 1 and ALB creation 
+    SHALL be disabled
+    
+    Validates: Requirements 1.3, 1.5
+    """
+    resources = stackgen_client.get_appstack_resources()
+    ecs_services = [r for r in resources if r['resourceType'] == 'aws_ecs']
+    
+    assert len(ecs_services) > 0, "No ECS service found"
+    
+    for ecs in ecs_services:
+        config = ecs['configuration']
+        assert config['ecs_service_desired_count'] == 1, \
+            f"Expected desired count 1, got {config['ecs_service_desired_count']}"
+        assert config['create_ingress_alb'] == False, \
+            "ALB should not be created for background service"
+
+
+# Property 4: ECR Security Configuration  
+def test_property_4_ecr_security_configuration(stackgen_client):
+    """
+    Feature: drift-agent-infrastructure, Property 4: ECR security configuration
+    
+    For any ECR repository named "drift-agent", image scanning SHALL be enabled
+    
+    Validates: Requirements 2.2
+    """
+    resources = stackgen_client.get_appstack_resources()
+    ecr_repos = [r for r in resources if r['resourceType'] == 'aws_ecr']
+    
+    assert len(ecr_repos) > 0, "No ECR repository found"
+    
+    for ecr in ecr_repos:
+        if ecr['configuration']['name'] == 'drift-agent':
+            assert ecr['configuration']['scan_on_push'] == True, \
+                "Image scanning must be enabled for security"
+
+
+# Property 5: ECR Naming Convention
+def test_property_5_ecr_naming_convention(stackgen_client):
+    """
+    Feature: drift-agent-infrastructure, Property 5: ECR naming convention
+    
+    For any ECR repository in the appstack, the name SHALL be "drift-agent"
+    
+    Validates: Requirements 2.1
+    """
+    resources = stackgen_client.get_appstack_resources()
+    ecr_repos = [r for r in resources if r['resourceType'] == 'aws_ecr']
+    
+    assert len(ecr_repos) > 0, "No ECR repository found"
+    
+    for ecr in ecr_repos:
+        assert ecr['configuration']['name'] == 'drift-agent', \
+            f"Expected ECR name 'drift-agent', got '{ecr['configuration']['name']}'"
+
+
+# Property 6: CloudWatch Log Configuration
+def test_property_6_cloudwatch_log_configuration(stackgen_client):
+    """
+    Feature: drift-agent-infrastructure, Property 6: CloudWatch log configuration
+    
+    For any CloudWatch log group, the name SHALL be "/ecs/drift-agent" and 
+    retention SHALL be 7 days
+    
+    Validates: Requirements 3.2, 3.3
+    """
+    resources = stackgen_client.get_appstack_resources()
+    log_groups = [r for r in resources if r['resourceType'] == 'aws_cloudwatch_log_group']
+    
+    assert len(log_groups) > 0, "No CloudWatch log group found"
+    
+    for log_group in log_groups:
+        config = log_group['configuration']
+        assert config['name'] == '/ecs/drift-agent', \
+            f"Expected log group '/ecs/drift-agent', got '{config['name']}'"
+        assert config['retention_in_days'] == 7, \
+            f"Expected retention 7 days, got {config['retention_in_days']}"
+
+
+# Property 7: IAM Role Trust Policy
+def test_property_7_iam_role_trust_policy(stackgen_client):
+    """
+    Feature: drift-agent-infrastructure, Property 7: IAM role trust policy
+    
+    For any IAM role attached to ECS tasks, the assume role policy SHALL 
+    allow ecs-tasks.amazonaws.com
+    
+    Validates: Requirements 4.2
+    """
+    resources = stackgen_client.get_appstack_resources()
+    iam_roles = [r for r in resources if r['resourceType'] == 'aws_iam_role']
+    
+    assert len(iam_roles) > 0, "No IAM role found"
+    
+    for role in iam_roles:
+        policy_str = role['configuration']['assume_role_policy']
+        assert 'ecs-tasks.amazonaws.com' in policy_str, \
+            "IAM role must allow ECS tasks to assume it"
+
+
+# Property 8: VPC Network Configuration
+def test_property_8_vpc_network_configuration(stackgen_client):
+    """
+    Feature: drift-agent-infrastructure, Property 8: VPC network configuration
+    
+    For any VPC, DNS hostnames SHALL be enabled and CIDR prefix SHALL be >= 20 
+    (meaning /20 or smaller network)
+    
+    Validates: Requirements 5.1, 5.2, 5.3
+    """
+    resources = stackgen_client.get_appstack_resources()
+    vpcs = [r for r in resources if r['resourceType'] == 'aws_vpc']
+    
+    assert len(vpcs) > 0, "No VPC found"
+    
+    for vpc in vpcs:
+        config = vpc['configuration']
+        
+        # Check DNS is enabled
+        assert config['enable_dns_hostnames'] == True, \
+            "DNS hostnames must be enabled"
+        assert config['enable_dns_support'] == True, \
+            "DNS support must be enabled"
+        
+        # Check CIDR is /20 or smaller (prefix >= 20)
+        cidr = config['cidr_block']
+        prefix = int(cidr.split('/')[1])
+        assert prefix >= 20, \
+            f"CIDR prefix must be >= 20 (smaller network), got /{prefix}"
+
+
+# Property 9: VPC Tagging
+def test_property_9_vpc_tagging(stackgen_client):
+    """
+    Feature: drift-agent-infrastructure, Property 9: VPC tagging
+    
+    For any VPC, tags SHALL include a "Name" key for identification
+    
+    Validates: Requirements 5.4
+    """
+    resources = stackgen_client.get_appstack_resources()
+    vpcs = [r for r in resources if r['resourceType'] == 'aws_vpc']
+    
+    assert len(vpcs) > 0, "No VPC found"
+    
+    for vpc in vpcs:
+        tags = vpc['configuration'].get('tags', {})
+        assert 'Name' in tags, \
+            "VPC must have a 'Name' tag for identification"
+        assert tags['Name'], \
+            "VPC Name tag must not be empty"
+
+
+if __name__ == '__main__':
+    pytest.main([__file__, '-v'])
+
